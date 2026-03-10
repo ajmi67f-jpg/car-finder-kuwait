@@ -16,14 +16,15 @@ module.exports = async function handler(req, res) {
         'anthropic-beta': 'web-search-2025-03-05',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5',
+        model: 'claude-sonnet-4-20250514',
         max_tokens: 4000,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        system: 'أنت مساعد بحث. ابحث دائماً ثم أرجع النتائج كـ JSON فقط بدون أي نص إضافي.',
         messages: [{
           role: 'user',
-          content: `ابحث في موقع 4sale.com.kw عن سيارات "${q}" للبيع من أفراد في الكويت.
-أرجع النتائج كـ JSON فقط بهذا الشكل بدون أي نص إضافي:
-{"results":[{"title":"","price_text":"","year":"","color":"","km":"","original_paint":"","condition":"","location":"","url":""}]}`
+          content: `ابحث في 4sale.com.kw عن سيارات "${q}" من أفراد في الكويت.
+بعد البحث أرجع JSON فقط بهذا الشكل:
+{"results":[{"title":"اسم السيارة","price_text":"السعر","year":"السنة","color":"اللون","km":"الكيلومترات","original_paint":"صبغ الوكالة","condition":"الحالة","location":"المنطقة","url":"الرابط"}]}`
         }]
       })
     });
@@ -35,13 +36,22 @@ module.exports = async function handler(req, res) {
       if (block.type === 'text') text += block.text;
     }
 
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const jsonMatch = text.match(/\{[\s\S]*"results"[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       return res.status(200).json(parsed);
     }
 
-    res.status(200).json({ results: [], debug: { raw: text.substring(0, 500) } });
+    res.status(200).json({
+      results: [],
+      debug: {
+        content_types: (data.content || []).map(b => b.type),
+        text_length: text.length,
+        raw: text.substring(0, 800),
+        stop_reason: data.stop_reason,
+        api_error: data.error,
+      }
+    });
 
   } catch (e) {
     res.status(200).json({ results: [], error: e.message });
