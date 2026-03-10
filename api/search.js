@@ -7,50 +7,42 @@ module.exports = async function handler(req, res) {
   if (!q) return res.status(200).json({ results: [] });
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
+    const url = `https://api.opensooq.com/search?q=${encodeURIComponent(q)}&country_code=kw&category_id=2&lang=ar`;
+    const resp = await fetch(url, {
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'web-search-2025-03-05',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: 'أنت مساعد بحث. ابحث دائماً ثم أرجع النتائج كـ JSON فقط بدون أي نص إضافي.',
-        messages: [{
-          role: 'user',
-          content: `ابحث في 4sale.com.kw عن سيارات "${q}" من أفراد في الكويت.
-بعد البحث أرجع JSON فقط بهذا الشكل:
-{"results":[{"title":"اسم السيارة","price_text":"السعر","year":"السنة","color":"اللون","km":"الكيلومترات","original_paint":"صبغ الوكالة","condition":"الحالة","location":"المنطقة","url":"الرابط"}]}`
-        }]
-      })
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'ar',
+        'Referer': 'https://kw.opensooq.com/',
+      }
     });
 
-    const data = await response.json();
+    const data = await resp.json();
+    const items = data?.data?.posts || data?.posts || data?.results || [];
 
-    let text = '';
-    for (const block of data.content || []) {
-      if (block.type === 'text') text += block.text;
-    }
-
-    const jsonMatch = text.match(/\{[\s\S]*"results"[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      return res.status(200).json(parsed);
-    }
+    const results = items.slice(0, 50).map(item => {
+      const price = parseFloat(String(item.price || 0).replace(/[^0-9.]/g, ''));
+      return {
+        title: item.title || item.subject || '',
+        price_text: price ? price.toLocaleString() + ' د.ك' : '—',
+        year: item.year || '—',
+        color: item.color || '—',
+        km: item.km || item.mileage || '—',
+        original_paint: item.original_paint || '—',
+        condition: item.condition || '—',
+        location: item.city_label || item.area || '—',
+        url: item.url || `https://kw.opensooq.com/post/${item.id}`,
+        image: item.image || item.thumbnail || '',
+      };
+    });
 
     res.status(200).json({
-      results: [],
-      debug: {
-        content_types: (data.content || []).map(b => b.type),
-        text_length: text.length,
-        raw: text.substring(0, 800),
-        stop_reason: data.stop_reason,
-        api_error: data.error,
-      }
+      results,
+      debug: results.length === 0 ? {
+        status: resp.status,
+        keys: Object.keys(data || {}),
+        sample: JSON.stringify(data).substring(0, 500)
+      } : undefined
     });
 
   } catch (e) {
