@@ -1,43 +1,80 @@
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const q = (req.query.q || '').trim();
-  if (!q) return res.status(200).json({ results: [] });
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'يرجى إدخال كلمة البحث' });
+
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'مفتاح API غير موجود' });
+
+  const prompt = `ابحث في موقع q84sale.com الكويتي عن سيارات مستعملة للبيع تطابق: "${q}"
+
+البحث في: https://www.q84sale.com/ar/automotive/used-cars/
+
+مهم جداً:
+- ابحث عن إعلانات أفراد فقط (وليس معارض)
+- استخرج أكبر عدد ممكن من النتائج (10-20 نتيجة)
+- لكل سيارة استخرج: العنوان، السعر، السنة، اللون، الكيلومترات، صبغ الوكالة، الحالة، الموقع، رابط الإعلان، رابط الصورة
+
+أجب فقط بـ JSON بدون أي نص إضافي بهذا الشكل بالضبط:
+{
+  "results": [
+    {
+      "title": "عنوان الإعلان",
+      "price_text": "السعر مثل 5,000 د.ك",
+      "year": "2020",
+      "color": "أبيض",
+      "km": "50000",
+      "original_paint": "نعم أو لا أو —",
+      "condition": "جيدة",
+      "location": "المنطقة",
+      "url": "https://www.q84sale.com/ar/listing/...",
+      "image": "https://... أو null"
+    }
+  ]
+}
+
+إذا لم تجد نتائج أرجع: {"results": []}`;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const apiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'web-search-2025-03-05',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 4000,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: 'أنت مساعد بحث. ابحث دائماً ثم أرجع النتائج كـ JSON فقط بدون أي نص إضافي.',
-        messages: [{
-          role: 'user',
-          content: `ابحث في 4sale.com.kw عن سيارات "${q}" من أفراد في الكويت. بعد البحث أرجع JSON فقط بهذا الشكل: {"results":[{"title":"","price_text":"","year":"","color":"","km":"","original_paint":"","condition":"","location":"","url":""}]}`
-        }]
+        messages: [{ role: 'user', content: prompt }]
       })
     });
 
-    const data = await response.json();
+    if (!apiRes.ok) {
+      const errText = await apiRes.text();
+      return res.status(500).json({ error: `خطأ في API: ${apiRes.status}`, debug: errText });
+    }
+
+    const data = await apiRes.json();
+
     let text = '';
     for (const block of data.content || []) {
       if (block.type === 'text') text += block.text;
     }
-    const jsonMatch = text.match(/\{[\s\S]*"results"[\s\S]*\}/);
-    if (jsonMatch) {
-      return res.status(200).json(JSON.parse(jsonMatch[0]));
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return res.status(200).json({ debug: { raw: text.slice(0, 500), model_stop: data.stop_reason } });
     }
-    res.status(200).json({ results: [], debug: { content_types: (data.content||[]).map(b=>b.type), raw: text.substring(0,500), api_error: data.error } });
-  } catch (e) {
-    res.status(200).json({ results: [], error: e.message });
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    return res.status(200).json(parsed);
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-};
+}
